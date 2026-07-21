@@ -16,6 +16,6 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.20.0",
-    "yahoo-finance2": "^3.14.0"
+    "yahoo-finance2": "^4.0.0"
   }
 }
