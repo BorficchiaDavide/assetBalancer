@@ -141,18 +141,11 @@ function HoldingRow({ e, currency, t, onView }) {
         <div className={e.pnlAbs >= 0 ? 'pnl-pos' : 'pnl-neg'} style={{ fontWeight: 500 }}>
           {formatMoney(e.pnlAbs, currency)}
         </div>
-        <div className={e.pnlAbs >= 0 ? 'pnl-pos' : 'pnl-neg'} style={{ fontSize: 11 }}>
-          {formatPct(e.pnlPct)}
-        </div>
       </td>
       <td className="num tnum" style={{ paddingRight: 24 }}>
-        <div style={{ fontWeight: 500 }}>{e.weight.toFixed(1)}%</div>
-        {e.excluded
-          ? <div style={{ fontSize: 11, color: 'var(--text-3)' }}>—</div>
-          : <div style={{ fontSize: 11, color: Math.abs(e.drift) > 1 ? 'var(--text-2)' : 'var(--text-3)' }}>
-              {e.targetPct}%{e.drift !== 0 && ` (${e.drift > 0 ? '+' : ''}${e.drift.toFixed(1)})`}
-            </div>
-        }
+        <div className={e.pnlAbs >= 0 ? 'pnl-pos' : 'pnl-neg'} style={{ fontWeight: 500 }}>
+          {formatPct(e.pnlPct)}
+        </div>
       </td>
     </tr>
   )
@@ -165,7 +158,7 @@ const SORT_COLS = {
   avgPrice: e => e.avgPrice,
   value:    e => e.value,
   pnl:      e => e.pnlAbs,
-  weight:   e => e.weight,
+  pnlPct:   e => e.pnlPct,
 }
 
 function sortList(list, key, dir) {
@@ -501,7 +494,7 @@ export function Dashboard({ t, holdings, setHoldings, currency, lang, livePrices
                     <SortTh label={t.avg_load}     col="avgPrice" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="num" />
                     <SortTh label={t.market_value} col="value"    sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="num" />
                     <SortTh label={t.pnl}          col="pnl"      sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="num" />
-                    <SortTh label={`${t.weight} / ${t.target}`} col="weight" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="num" style={{ paddingRight: 24 }} />
+                    <SortTh label={t.pnl_pct} col="pnlPct" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="num" style={{ paddingRight: 24 }} />
                   </tr>
                 </thead>
                 <tbody>
