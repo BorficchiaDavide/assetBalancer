@@ -449,7 +449,7 @@ export function Dashboard({ t, holdings, setHoldings, currency, lang, livePrices
                 <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>{t.target_vs_actual}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   {openTarget && (
-                    <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); setShowEditTargets(true) }} title={t.edit}>
+                    <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); setShowEditTargets(true) }} title={t.edit_target_pct}>
                       <Icon name="edit" size={13} />
                     </button>
                   )}
