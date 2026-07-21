@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>AssetBalancer — Schema ER</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <style>
+    body { margin: 0; background: #fff; display: flex; justify-content: center; padding: 32px; font-family: -apple-system, sans-serif; }
+    h2 { text-align: center; color: #111; font-size: 20px; margin-bottom: 24px; }
+    .wrap { max-width: 1000px; width: 100%; }
+    .mermaid { background: #f8f9fa; border-radius: 12px; padding: 32px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>AssetBalancer — Schema ER</h2>
+    <div class="mermaid">
+erDiagram
+    users {
+        SERIAL      id            PK
+        TEXT        email         UK
+        TEXT        password_hash
+        TEXT        display_name
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    sessions {
+        SERIAL      id          PK
+        INTEGER     user_id     FK
+        TEXT        token_hash  UK
+        TIMESTAMPTZ expires_at
+        TIMESTAMPTZ created_at
+    }
+
+    portfolios {
+        SERIAL      id          PK
+        INTEGER     user_id     FK
+        TEXT        name
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    instruments {
+        TEXT        isin               PK
+        TEXT        name
+        TEXT        ticker
+        TEXT        exchange
+        TEXT        quote_type
+        TEXT        macro_asset_class
+        TIMESTAMPTZ cached_at
+    }
+
+    portfolio_assets {
+        SERIAL       id                   PK
+        INTEGER      portfolio_id         FK
+        TEXT         isin                 FK
+        NUMERIC      quantity
+        NUMERIC      purchase_price_eur
+        NUMERIC      target_pct
+        BOOLEAN      excluded
+        TIMESTAMPTZ  added_at
+        TIMESTAMPTZ  updated_at
+    }
+
+    users      ||--o{ sessions         : "ha"
+    users      ||--o{ portfolios       : "possiede"
+    portfolios ||--o{ portfolio_assets : "contiene"
+    instruments ||--o{ portfolio_assets : "referenziato in"
+    </div>
+  </div>
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: 'default', er: { diagramPadding: 40 } });
+  </script>
+</body>
+</html>
