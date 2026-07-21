@@ -530,7 +530,7 @@ export function Dashboard({ t, holdings, setHoldings, currency, lang, livePrices
       {showEditTargets && (
         <EditTargetsModal
           t={t}
-          holdings={holdings}
+          holdings={holdings.filter(h => !h.excluded)}
           onClose={() => setShowEditTargets(false)}
           onSave={updated => setHoldings(holdings.map(h => {
             const u = updated.find(x => x.isin === h.isin)

@@ -139,11 +139,11 @@ export function AddEtfModal({ t, onClose, onAdd, currency }) {
 
 export function EditTargetsModal({ t, holdings, onClose, onSave }) {
   const [local, setLocal] = useState(holdings.map(h => ({ ...h })))
-  const total = local.reduce((s, h) => s + (h.targetPct || 0), 0)
+  const total = Math.round(local.reduce((s, h) => s + (h.targetPct || 0), 0) * 10) / 10
 
   const update = (i, val) => {
     const next = [...local]
-    next[i] = { ...next[i], targetPct: parseInt(val) }
+    next[i] = { ...next[i], targetPct: parseFloat(val) }
     setLocal(next)
   }
 
@@ -166,11 +166,11 @@ export function EditTargetsModal({ t, holdings, onClose, onSave }) {
                     <div style={{ fontWeight: 500, fontSize: 14 }}>{h.name || h.isin}</div>
                     <div style={{ fontSize: 11, color: 'var(--text-3)' }} className="mono">{h.isin}</div>
                   </div>
-                  <div style={{ fontSize: 18, fontWeight: 600, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em', minWidth: 48, textAlign: 'right' }}>{v}%</div>
+                  <div style={{ fontSize: 18, fontWeight: 600, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em', minWidth: 48, textAlign: 'right' }}>{v.toFixed(1)}%</div>
                 </div>
                 <input
                   className="target-slider"
-                  type="range" min="0" max="100" step="1"
+                  type="range" min="0" max="100" step="0.1"
                   value={v}
                   onChange={e => update(i, e.target.value)}
                 />
