@@ -11,13 +11,10 @@ Built as a full-stack project: React frontend, an Express backend-for-frontend, 
 Email/password signup and login, with short-lived JWT access tokens and rotating refresh tokens for persistent sessions.
 
 ![Login screen](docs/screenshots/login.png)
-![Registration screen](docs/screenshots/register.png)
 
 ### Add holdings by ISIN
 
 Search any ETF by its ISIN code — AssetBalancer resolves it against Yahoo Finance, preferring EUR-listed exchanges when available, and shows the current price before you confirm quantity and average cost.
-
-![Add ETF modal](docs/screenshots/add-etf.png)
 
 ### Portfolio dashboard
 
