@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken'
 import express from 'express'
 import helmet from 'helmet'
 import cors from 'cors'
+import cookieParser from 'cookie-parser'
 import pg from 'pg'
 import YahooFinance from 'yahoo-finance2'
 import { rateLimit } from 'express-rate-limit'
@@ -23,6 +24,19 @@ if (JWT_SECRET === 'change-me-in-production') {
 const ACCESS_TOKEN_EXPIRY  = '15m'
 const REFRESH_TOKEN_DAYS   = 30
 
+// Secure requires HTTPS — flip on once the HTTPS reverse proxy (see PRODUCTION.md) is in place
+// by setting NODE_ENV=production, otherwise browsers silently drop the cookie over plain HTTP.
+const COOKIE_SECURE     = process.env.NODE_ENV === 'production'
+const REFRESH_COOKIE    = 'ab_refresh_token'
+const REFRESH_COOKIE_OPTS = {
+  httpOnly: true,
+  secure:   COOKIE_SECURE,
+  sameSite: 'strict',
+  path:     '/auth',
+}
+
+const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000 // 1h
+
 // ---------------------------------------------------------------------------
 // Infrastructure
 // ---------------------------------------------------------------------------
@@ -34,8 +48,9 @@ const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
 
 const app = express()
 app.use(helmet())
-app.use(cors({ origin: ALLOWED_ORIGIN }))
+app.use(cors({ origin: ALLOWED_ORIGIN, credentials: true }))
 app.use(express.json({ limit: '100kb' }))
+app.use(cookieParser())
 
 const asyncRoute = fn => (req, res, next) => fn(req, res, next).catch(next)
 
@@ -71,6 +86,17 @@ async function issueTokens(userId) {
     [userId, hashToken(refreshToken), expiresAt]
   )
   return { accessToken, refreshToken }
+}
+
+function setRefreshCookie(res, refreshToken) {
+  res.cookie(REFRESH_COOKIE, refreshToken, {
+    ...REFRESH_COOKIE_OPTS,
+    maxAge: REFRESH_TOKEN_DAYS * 86_400_000,
+  })
+}
+
+function clearRefreshCookie(res) {
+  res.clearCookie(REFRESH_COOKIE, REFRESH_COOKIE_OPTS)
 }
 
 function authenticate(req, res, next) {
@@ -116,7 +142,8 @@ app.post('/auth/register', authLimiter, asyncRoute(async (req, res) => {
       [email.toLowerCase().trim(), password_hash, display_name ?? null]
     )
     const tokens = await issueTokens(rows[0].id)
-    res.status(201).json({ user: rows[0], ...tokens })
+    setRefreshCookie(res, tokens.refreshToken)
+    res.status(201).json({ user: rows[0], accessToken: tokens.accessToken })
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'email already registered' })
     throw e
@@ -137,29 +164,35 @@ app.post('/auth/login', authLimiter, asyncRoute(async (req, res) => {
   if (!user || !valid) return res.status(401).json({ error: 'invalid credentials' })
 
   const tokens = await issueTokens(user.id)
-  res.json({ user: { id: user.id, email: user.email, display_name: user.display_name }, ...tokens })
+  setRefreshCookie(res, tokens.refreshToken)
+  res.json({ user: { id: user.id, email: user.email, display_name: user.display_name }, accessToken: tokens.accessToken })
 }))
 
 app.post('/auth/refresh', asyncRoute(async (req, res) => {
-  const { refreshToken } = req.body
-  if (!refreshToken) return res.status(400).json({ error: 'refreshToken is required' })
+  const refreshToken = req.cookies?.[REFRESH_COOKIE]
+  if (!refreshToken) return res.status(401).json({ error: 'no refresh token' })
 
   const oldHash = hashToken(refreshToken)
   const { rows } = await pool.query(
     'DELETE FROM sessions WHERE token_hash = $1 AND expires_at > NOW() RETURNING user_id',
     [oldHash]
   )
-  if (rows.length === 0) return res.status(401).json({ error: 'invalid or expired refresh token' })
+  if (rows.length === 0) {
+    clearRefreshCookie(res)
+    return res.status(401).json({ error: 'invalid or expired refresh token' })
+  }
 
   const { accessToken, refreshToken: newRefreshToken } = await issueTokens(rows[0].user_id)
-  res.json({ accessToken, refreshToken: newRefreshToken })
+  setRefreshCookie(res, newRefreshToken)
+  res.json({ accessToken })
 }))
 
 app.post('/auth/logout', authenticate, asyncRoute(async (req, res) => {
-  const { refreshToken } = req.body
+  const refreshToken = req.cookies?.[REFRESH_COOKIE]
   if (refreshToken) {
     await pool.query('DELETE FROM sessions WHERE token_hash = $1', [hashToken(refreshToken)])
   }
+  clearRefreshCookie(res)
   res.status(204).end()
 }))
 
@@ -547,8 +580,19 @@ async function migrate() {
   `)
 }
 
+async function cleanupExpiredSessions() {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM sessions WHERE expires_at < NOW()')
+    if (rowCount > 0) console.log(`[cleanup] removed ${rowCount} expired session(s)`)
+  } catch (err) {
+    console.error('[cleanup] failed to purge expired sessions', err)
+  }
+}
+
 app.listen(PORT, async () => {
   await migrate()
+  await cleanupExpiredSessions()
+  setInterval(cleanupExpiredSessions, SESSION_CLEANUP_INTERVAL_MS)
   console.log(`BEFF running on http://localhost:${PORT}`)
   console.log(`  POST /auth/register`)
   console.log(`  POST /auth/login`)

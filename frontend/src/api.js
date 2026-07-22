@@ -4,15 +4,11 @@ const BASE = import.meta.env.VITE_API_BASE ?? ''
 // Token management
 // ---------------------------------------------------------------------------
 
-// Access token lives only in memory — lost on page reload (intentional)
+// Access token lives only in memory — lost on page reload (intentional).
+// The refresh token lives in an HttpOnly cookie set by the server — the
+// frontend never reads or writes it directly, the browser sends it automatically.
 let _accessToken = null
 
-function getRefreshToken() {
-  try { return localStorage.getItem('ab_rt') || null } catch { return null }
-}
-function saveRefreshToken(t) {
-  try { localStorage.setItem('ab_rt', t) } catch {}
-}
 function saveUser(u) {
   try { localStorage.setItem('ab_user', JSON.stringify(u)) } catch {}
 }
@@ -21,7 +17,7 @@ function loadUser() {
 }
 function clearSession() {
   _accessToken = null
-  try { localStorage.removeItem('ab_rt'); localStorage.removeItem('ab_user') } catch {}
+  try { localStorage.removeItem('ab_user') } catch {}
 }
 
 export class AuthError extends Error {}
@@ -41,31 +37,22 @@ async function request(method, path, body) {
   const doFetch = () => fetch(`${BASE}${path}`, {
     method,
     headers: makeHeaders(),
+    credentials: 'include',
     body: body != null ? JSON.stringify(body) : undefined,
   })
 
   let res = await doFetch()
 
-  // On 401: attempt a single silent token refresh, then retry
+  // On 401: attempt a single silent token refresh (via the HttpOnly cookie), then retry
   if (res.status === 401) {
-    const rt = getRefreshToken()
-    if (rt) {
-      const r2 = await fetch(`${BASE}/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: rt }),
-      })
-      if (r2.ok) {
-        const refreshData = await r2.json()
-        _accessToken = refreshData.accessToken
-        if (refreshData.refreshToken) saveRefreshToken(refreshData.refreshToken)
-        res = await doFetch()
-      } else {
-        clearSession()
-        throw new AuthError('Sessione scaduta — effettua di nuovo il login')
-      }
+    const r2 = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
+    if (r2.ok) {
+      const refreshData = await r2.json()
+      _accessToken = refreshData.accessToken
+      res = await doFetch()
     } else {
-      throw new AuthError('Non autenticato')
+      clearSession()
+      throw new AuthError('Sessione scaduta — effettua di nuovo il login')
     }
   }
 
@@ -89,7 +76,6 @@ const del   = path        => request('DELETE', path, null)
 export async function register(email, password, display_name) {
   const data = await post('/auth/register', { email, password, display_name })
   _accessToken = data.accessToken
-  saveRefreshToken(data.refreshToken)
   saveUser(data.user)
   return data.user
 }
@@ -97,14 +83,12 @@ export async function register(email, password, display_name) {
 export async function login(email, password) {
   const data = await post('/auth/login', { email, password })
   _accessToken = data.accessToken
-  saveRefreshToken(data.refreshToken)
   saveUser(data.user)
   return data.user
 }
 
 export async function logout() {
-  const rt = getRefreshToken()
-  try { await post('/auth/logout', { refreshToken: rt }) } catch {}
+  try { await post('/auth/logout') } catch {}
   clearSession()
 }
 
@@ -112,21 +96,14 @@ export async function changePassword(currentPassword, newPassword) {
   await patch('/auth/password', { currentPassword, newPassword })
 }
 
-// Restores a previous session from the stored refresh token.
+// Restores a previous session from the HttpOnly refresh-token cookie, if present.
 // Returns the user object on success, null if no valid session exists.
 export async function restoreSession() {
-  const rt = getRefreshToken()
-  if (!rt) return null
   try {
-    const r = await fetch(`${BASE}/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: rt }),
-    })
+    const r = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
     if (!r.ok) { clearSession(); return null }
     const refreshData = await r.json()
     _accessToken = refreshData.accessToken
-    if (refreshData.refreshToken) saveRefreshToken(refreshData.refreshToken)
     const user = await get('/auth/me')
     saveUser(user)
     return user

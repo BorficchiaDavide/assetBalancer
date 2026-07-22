@@ -2,84 +2,46 @@
 
 Checklist ordinata per priorità di ciò che manca prima di portare AssetBalancer in produzione.
 
+Implementato: rate limiting su `/auth/login` e `/auth/register` (`express-rate-limit`), health
+check con verifica reale del DB, header di sicurezza con `helmet`, credenziali DB senza default
+debole (`POSTGRES_PASSWORD` obbligatoria in `docker-compose.yml`), refresh token in cookie
+HttpOnly (`BEFF/server.js`, scope `/auth`, rotazione ad ogni refresh), pulizia periodica delle
+sessioni scadute (job in-process ogni ora in `BEFF/server.js`).
+
+Nota sul cookie di refresh: il flag `Secure` è legato a `NODE_ENV=production`, che oggi non è
+impostato in `docker-compose.yml` — corretto finché non c'è HTTPS (vedi punto 1), altrimenti il
+browser scarterebbe il cookie su connessioni in chiaro. Quando si aggiunge il reverse proxy TLS,
+impostare anche `NODE_ENV=production` nel servizio `beff` per attivare `Secure`.
+
 ---
 
 ## 🔴 Obbligatorio
 
 ### 1. HTTPS con certificato SSL
-Senza TLS i JWT viaggiano in chiaro sulla rete.
+Senza TLS i JWT viaggiano in chiaro sulla rete. Vedi anche "Deferred features" in `CLAUDE.md`
+(in attesa di un dominio reale).
 
 - Aggiungi un reverse proxy (Nginx o Caddy) davanti al container `frontend`
 - Usa **Let's Encrypt** per il certificato gratuito (Caddy lo gestisce automaticamente)
 - Redireziona tutto il traffico HTTP → HTTPS
+- Aggiungi `docker-compose.prod.yml` con il servizio Caddy
 - Aggiorna `ALLOWED_ORIGIN` nel BEFF con il dominio HTTPS reale
-
-### 2. Credenziali database forti
-Le credenziali attuali sono `assetbalancer`/`assetbalancer`.
-
-- Genera una password sicura: `openssl rand -base64 32`
-- Aggiungila al `.env` di produzione:
-  ```
-  POSTGRES_PASSWORD=<password-generata>
-  DATABASE_URL=postgresql://assetbalancer:<password-generata>@db:5432/assetbalancer
-  ```
-- Non esporre mai la porta 5432 del DB all'esterno (tenerla solo sulla rete `internal`)
-
-### 3. Rate limiting sulle route di autenticazione
-Senza limiti un attaccante può tentare milioni di password.
-
-- Installa `express-rate-limit`:
-  ```bash
-  cd BEFF && npm install express-rate-limit
-  ```
-- Applica sulle route `/auth/login` e `/auth/register`:
-  ```js
-  import rateLimit from 'express-rate-limit'
-  const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 })
-  app.use('/auth/login', authLimiter)
-  app.use('/auth/register', authLimiter)
-  ```
-
-### 4. Refresh token in cookie HttpOnly
-Il refresh token è attualmente in `localStorage`, accessibile da JavaScript e vulnerabile a XSS.
-
-- Spostarlo in un cookie `HttpOnly; Secure; SameSite=Strict` lato server
-- Il frontend non deve più leggere/scrivere il refresh token — lo gestisce il browser automaticamente
-- Modificare `/auth/login`, `/auth/register`, `/auth/refresh` e `/auth/logout` nel BEFF di conseguenza
+- Imposta `NODE_ENV=production` sul servizio `beff` per attivare il flag `Secure` sul cookie di refresh
 
 ---
 
 ## 🟡 Importante
 
-### 5. Pulizia sessioni scadute
-La tabella `sessions` cresce senza limite — ogni login aggiunge una riga che non viene mai rimossa automaticamente.
-
-- Aggiungere un job periodico (cron o `pg_cron`) che esegua:
-  ```sql
-  DELETE FROM sessions WHERE expires_at < NOW();
-  ```
-- In alternativa, usare un `pg_cron` direttamente nel DB oppure un container separato con un semplice script Node
-
-### 6. Health check applicativo reale
-L'attuale `GET /health` risponde `ok` anche se il DB è irraggiungibile.
-
-- Modificarlo per eseguire una query di verifica:
-  ```js
-  app.get('/health', async (_req, res) => {
-    await pool.query('SELECT 1')
-    res.json({ status: 'ok', ts: new Date() })
-  })
-  ```
-
-### 7. Variabili d'ambiente separate per ambiente
-Non usare lo stesso `.env` per sviluppo locale e produzione.
+### 2. Variabili d'ambiente separate per ambiente
+Non usare lo stesso `.env` per sviluppo locale e produzione. Oggi esiste solo `.env.example` e
+`.env` locale.
 
 - `.env` → sviluppo locale (già nel `.gitignore`)
 - `.env.production` → produzione (mai nel repository, gestito dal sistema di deploy)
 - Valori da differenziare: `JWT_SECRET`, `DATABASE_URL`, `ALLOWED_ORIGIN`, `POSTGRES_PASSWORD`
 
-### 8. Backup automatico del database
-Il volume `pgdata` è persistente ma non è un backup.
+### 3. Backup automatico del database
+Il volume `pgdata` è persistente ma non è un backup. Nessuno script o job di backup esiste nel repo.
 
 - Configurare backup periodici con `pg_dump`
 - Esempio con un container dedicato o uno script cron sull'host:
@@ -92,33 +54,25 @@ Il volume `pgdata` è persistente ma non è un backup.
 
 ## 🟢 Consigliato
 
-### 9. Header di sicurezza HTTP con Helmet.js
-Aggiunge protezioni contro XSS, clickjacking e altri attacchi comuni in una riga.
-
-```bash
-cd BEFF && npm install helmet
-```
-```js
-import helmet from 'helmet'
-app.use(helmet())
-```
-
-### 10. Logging strutturato
-Sostituire i `console.log` con un logger strutturato come `pino` per avere log in formato JSON interrogabili in produzione.
+### 4. Logging strutturato
+Il BEFF usa ancora `console.log`/`console.error` (`BEFF/server.js`). Sostituire con un logger
+strutturato come `pino` per avere log in formato JSON interrogabili in produzione.
 
 ```bash
 cd BEFF && npm install pino pino-http
 ```
 
-### 11. Reset password via email
-Attualmente non c'è modo di recuperare un account con password dimenticata.
+### 5. Reset password via email
+Attualmente non c'è modo di recuperare un account con password dimenticata — nessuna route
+`/auth/forgot-password` o `/auth/reset-password` nel BEFF.
 
 - Aggiungere tabella `password_reset_tokens` nel DB
 - Integrare un servizio di invio email (Resend, SendGrid, SMTP)
 - Route: `POST /auth/forgot-password` e `POST /auth/reset-password`
 
-### 12. Validazione input con Zod
-Le route del BEFF fanno validazioni manuali (`if (!email || !password)`). Centralizzare con uno schema di validazione riduce i bug.
+### 6. Validazione input con Zod
+Le route del BEFF fanno ancora validazioni manuali (`if (!email || !password)`). Centralizzare
+con uno schema di validazione riduce i bug.
 
 ```bash
 cd BEFF && npm install zod
@@ -130,13 +84,9 @@ cd BEFF && npm install zod
 
 ```
 1. HTTPS                          ← blocca tutto il resto
-2. Credenziali DB forti
-3. Rate limiting
-4. Cookie HttpOnly
-5. Health check reale
-6. Backup DB
-7. Pulizia sessioni
-8. Helmet + logging
-9. Reset password
-10. Validazione Zod
+2. Variabili d'ambiente per produzione
+3. Backup DB
+4. Logging strutturato
+5. Reset password
+6. Validazione Zod
 ```
