@@ -20,13 +20,3 @@ export const MACRO_CLASS_COLORS = {
   'Crypto & Digital Assets': '#AF52DE',
   'Alternative Investments': '#5E5CE6',
 }
-
-export const MACRO_CLASS_LABELS = {
-  'Equity':                  'Azioni',
-  'Fixed Income':            'Obbligazioni',
-  'Cash & Cash Equivalents': 'Monetario',
-  'Commodities':             'Materie prime',
-  'Real Estate':             'Immobiliare',
-  'Crypto & Digital Assets': 'Crypto',
-  'Alternative Investments': 'Alternativi',
-}

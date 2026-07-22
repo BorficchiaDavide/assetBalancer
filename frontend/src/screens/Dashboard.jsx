@@ -2,7 +2,6 @@ import { useState, useRef, useCallback } from 'react'
 import { Icon } from '../components/Icon'
 import { computeHoldings, groupByMacroClass } from '../compute'
 import { formatMoney, formatPct, formatQty } from '../format'
-import { MACRO_CLASS_LABELS } from '../constants'
 import { AddEtfModal, EditTargetsModal } from './Onboarding'
 
 function annularArc(cx, cy, r1, r2, a0, a1) {
@@ -19,7 +18,7 @@ function annularArc(cx, cy, r1, r2, a0, a1) {
   ].join(' ')
 }
 
-export function Donut({ enriched, totalValue, currency, size = 220 }) {
+export function Donut({ enriched, totalValue, currency, t, size = 220 }) {
   const [tooltip, setTooltip] = useState(null)
   const svgRef = useRef(null)
 
@@ -41,7 +40,7 @@ export function Donut({ enriched, totalValue, currency, size = 220 }) {
     innerSlices.push({
       d:     annularArc(cx, cy, RI_IN, RI_OUT, angle + GAP / 2, angle + gAngle - GAP / 2),
       color: g.color,
-      name:  MACRO_CLASS_LABELS[g.cls] ?? g.cls,
+      name:  t.asset_classes[g.cls] ?? g.cls,
       pct:   g.weight,
     })
     let assetAngle = angle
@@ -90,7 +89,7 @@ export function Donut({ enriched, totalValue, currency, size = 220 }) {
         ))}
         <circle cx={cx} cy={cy} r={RI_IN} fill="var(--surface)" />
         <text textAnchor="middle" style={{ fontFamily: 'inherit' }}>
-          <tspan x={cx} y={cy - 4} style={{ fontSize: 8, fill: 'var(--text-3)' }}>Totale</tspan>
+          <tspan x={cx} y={cy - 4} style={{ fontSize: 8, fill: 'var(--text-3)' }}>{t.total}</tspan>
           <tspan x={cx} y={cy + 10} style={{ fontSize: 11, fill: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em' }}>
             {formatMoney(totalValue, currency, { min: 0, max: 0 })}
           </tspan>
@@ -303,7 +302,7 @@ export function Dashboard({ t, holdings, setHoldings, currency, lang, livePrices
                   className={`portfolio-tab${portfolioId === p.id ? ' active' : ''}`}
                   onClick={() => onSwitchPortfolio(p.id)}
                   onDoubleClick={e => startRename(p, e)}
-                  title="Doppio click per rinominare · Trascina per riordinare"
+                  title={t.rename_tab_hint}
                   style={{ cursor: 'grab' }}
                 >
                   {p.name}
@@ -331,9 +330,9 @@ export function Dashboard({ t, holdings, setHoldings, currency, lang, livePrices
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           {onRefresh && (
-            <button className="btn" onClick={onRefresh} disabled={refreshing} title="Aggiorna prezzi">
+            <button className="btn" onClick={onRefresh} disabled={refreshing} title={t.refresh_prices}>
               <Icon name="refresh" size={14} style={refreshing ? { animation: 'spin 1s linear infinite' } : {}} />
-              {refreshing ? '…' : 'Refresh'}
+              {refreshing ? '…' : t.refresh}
             </button>
           )}
           <button className="btn" onClick={() => setShowAdd(true)}>
@@ -390,12 +389,12 @@ export function Dashboard({ t, holdings, setHoldings, currency, lang, livePrices
                 </div>
                 {openAlloc && (
                   <div style={{ padding: '0 20px 20px', display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 28, alignItems: 'center' }}>
-                    <Donut enriched={enriched} totalValue={totalValue} currency={currency} />
+                    <Donut enriched={enriched} totalValue={totalValue} currency={currency} t={t} />
                     <div className="legend">
                       {macroGroups.map(g => (
                         <div key={g.cls} className="legend-row">
                           <span className="legend-dot" style={{ background: g.color }} />
-                          <span className="legend-name">{MACRO_CLASS_LABELS[g.cls] ?? g.cls}</span>
+                          <span className="legend-name">{t.asset_classes[g.cls] ?? g.cls}</span>
                           <span className="legend-pct">{g.weight.toFixed(1)}%</span>
                         </div>
                       ))}
