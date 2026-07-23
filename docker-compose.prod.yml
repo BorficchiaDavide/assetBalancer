@@ -1,0 +1,32 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+    networks:
+      - internal
+    restart: unless-stopped
+
+  # Caddy is the only public entrypoint in this profile — frontend no longer
+  # publishes a host port, it's reachable only from other containers on `internal`.
+  frontend:
+    ports: !override []
+
+  beff:
+    environment:
+      - NODE_ENV=production
+      - ALLOWED_ORIGIN=https://${DOMAIN:-localhost}
+
+volumes:
+  caddy_data:
+  caddy_config:
