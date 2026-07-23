@@ -254,7 +254,6 @@ export default function App() {
             currency={currency} setCurrency={setCurrency}
             density={density}   setDensity={setDensity}
             pnlColor={pnlColor} setPnlColor={setPnlColor}
-            onSignOut={onSignOut}
             portfolios={portfolios}
             onDeletePortfolio={onDeletePortfolio}
           />
