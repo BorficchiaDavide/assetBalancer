@@ -139,6 +139,12 @@ export function Settings({ t, theme, setTheme, lang, setLang, currency, setCurre
         )}
       </div>
 
+      <div className="card" style={{ padding: 16, marginBottom: 28 }}>
+        <button className="btn btn-block" onClick={onSignOut} style={{ color: 'var(--danger, #e05252)' }}>
+          {t.sign_out}
+        </button>
+      </div>
+
       <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--red)', fontWeight: 500, padding: '0 4px 10px' }}>
         {t.delete_portfolio}
       </div>
@@ -170,9 +176,6 @@ export function Settings({ t, theme, setTheme, lang, setLang, currency, setCurre
             </button>
           </div>
         )}
-        <button className="btn btn-block" onClick={onSignOut} style={{ color: 'var(--danger, #e05252)' }}>
-          {t.sign_out}
-        </button>
       </div>
 
       {confirming && selectedPortfolio && (
