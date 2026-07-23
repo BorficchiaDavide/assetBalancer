@@ -43,8 +43,11 @@ async function request(method, path, body) {
 
   let res = await doFetch()
 
-  // On 401: attempt a single silent token refresh (via the HttpOnly cookie), then retry
-  if (res.status === 401) {
+  // On 401: attempt a single silent token refresh (via the HttpOnly cookie), then retry.
+  // Skip this for login/register — a 401 there just means wrong credentials, not an
+  // expired session, and there's no session yet to refresh.
+  const isAuthEntryPoint = path === '/auth/login' || path === '/auth/register'
+  if (res.status === 401 && !isAuthEntryPoint) {
     const r2 = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
     if (r2.ok) {
       const refreshData = await r2.json()
