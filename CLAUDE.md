@@ -87,8 +87,12 @@ BEFF `.env` (for local non-Docker runs):
   Set as an `HttpOnly; SameSite=Strict` cookie scoped to `/auth`, rotated on every `/auth/refresh`.
   `Secure` is on when `beff` runs with `NODE_ENV=production` (set by `docker-compose.prod.yml`)
 - Expired rows in `sessions` are purged by an in-process job in `beff` (on startup, then hourly)
-- All `/api/portfolios/*` routes require `Authorization: Bearer <accessToken>`
-- Finance routes (`/api/quote`, `/api/quotes`, `/api/search`, `/api/history`, `/api/rates`) are public
+- All `/api/portfolios/*` and finance routes (`/api/quote`, `/api/quotes`, `/api/search`,
+  `/api/history`, `/api/rates`) require `Authorization: Bearer <accessToken>` — every call site
+  in the frontend lives behind login, so there's no legitimate anonymous use case; keeping them
+  public would let anyone use this server as an open Yahoo Finance proxy
+- Finance routes also carry a lighter rate limit (30 req/min/IP) and reject `/api/quotes` bodies
+  with more than 50 ISINs, to cap the fan-out a single account can trigger against Yahoo Finance
 
 ## Prices & currency
 

@@ -8,6 +8,9 @@ import cookieParser from 'cookie-parser'
 import pg from 'pg'
 import YahooFinance from 'yahoo-finance2'
 import { rateLimit } from 'express-rate-limit'
+import pino from 'pino'
+import pinoHttp from 'pino-http'
+import { z } from 'zod'
 
 // ---------------------------------------------------------------------------
 // Config
@@ -17,8 +20,10 @@ const PORT           = process.env.PORT        || 3001
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173'
 const JWT_SECRET     = process.env.JWT_SECRET  || 'change-me-in-production'
 
+const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
+
 if (JWT_SECRET === 'change-me-in-production') {
-  console.warn('[WARN] JWT_SECRET is not set — do NOT use this in production')
+  logger.warn('JWT_SECRET is not set — do NOT use this in production')
 }
 
 const ACCESS_TOKEN_EXPIRY  = '15m'
@@ -49,6 +54,7 @@ const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
 const app = express()
 app.use(helmet())
 app.use(cors({ origin: ALLOWED_ORIGIN, credentials: true }))
+app.use(pinoHttp({ logger }))
 app.use(express.json({ limit: '100kb' }))
 app.use(cookieParser())
 
@@ -63,6 +69,94 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'too many requests, please try again later' },
+})
+
+// Lighter than authLimiter — finance routes require a valid session, so this is
+// defense-in-depth against a single account fanning out requests to Yahoo Finance.
+const financeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too many requests, please try again later' },
+})
+
+// ---------------------------------------------------------------------------
+// Validation (Zod)
+// ---------------------------------------------------------------------------
+
+function validateBody(schema) {
+  return (req, res, next) => {
+    const result = schema.safeParse(req.body)
+    if (!result.success) return res.status(400).json({ error: result.error.issues[0]?.message ?? 'invalid request body' })
+    req.body = result.data
+    next()
+  }
+}
+
+function validateQuery(schema) {
+  return (req, res, next) => {
+    const result = schema.safeParse(req.query)
+    if (!result.success) return res.status(400).json({ error: result.error.issues[0]?.message ?? 'invalid query parameters' })
+    req.query = result.data
+    next()
+  }
+}
+
+const isinSchema = z.string().trim().regex(/^[A-Z0-9]{12}$/i, 'invalid ISIN format')
+
+const registerSchema = z.object({
+  email:        z.string({ error: 'email is required' }).trim().toLowerCase().email('invalid email'),
+  password:     z.string({ error: 'password is required' }).min(8, 'password must be at least 8 characters'),
+  display_name: z.string().trim().min(1).optional(),
+})
+
+const loginSchema = z.object({
+  email:    z.string({ error: 'email is required' }).trim().toLowerCase().email('invalid email'),
+  password: z.string({ error: 'password is required' }).min(1, 'password is required'),
+})
+
+const passwordChangeSchema = z.object({
+  currentPassword: z.string({ error: 'currentPassword is required' }).min(1, 'currentPassword is required'),
+  newPassword:     z.string({ error: 'newPassword is required' }).min(8, 'password must be at least 8 characters'),
+})
+
+const portfolioNameSchema = z.object({
+  name: z.string({ error: 'name is required' }).trim().min(1, 'name is required'),
+})
+
+const reorderSchema = z.object({
+  ids: z.array(z.coerce.number().int().positive()).min(1, 'ids array is required'),
+})
+
+const quotesSchema = z.object({
+  isins: z.array(isinSchema).min(1, 'isins array is required').max(50, 'maximum 50 ISINs per request'),
+})
+
+const searchQuerySchema = z.object({
+  q: z.string().trim().max(100).optional().default(''),
+})
+
+const historyQuerySchema = z.object({
+  period: z.enum(['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y']).optional().default('6mo'),
+})
+
+const assetCreateSchema = z.object({
+  isin:               isinSchema,
+  name:               z.string().trim().optional(),
+  ticker:             z.string().trim().optional(),
+  exchange:           z.string().trim().optional(),
+  quote_type:         z.string().trim().optional(),
+  quantity:           z.coerce.number().positive('quantity must be positive'),
+  purchase_price_eur: z.coerce.number().nonnegative().nullable().optional(),
+  target_pct:         z.coerce.number().min(0).max(100).nullable().optional(),
+})
+
+const assetUpdateSchema = z.object({
+  quantity:           z.coerce.number().positive().nullable().optional(),
+  purchase_price_eur: z.coerce.number().nonnegative().nullable().optional(),
+  target_pct:         z.coerce.number().min(0).max(100).nullable().optional(),
+  excluded:           z.boolean().nullable().optional(),
 })
 
 // ---------------------------------------------------------------------------
@@ -129,17 +223,15 @@ async function assertPortfolioOwner(portfolioId, userId, res) {
 // Auth routes
 // ---------------------------------------------------------------------------
 
-app.post('/auth/register', authLimiter, asyncRoute(async (req, res) => {
+app.post('/auth/register', authLimiter, validateBody(registerSchema), asyncRoute(async (req, res) => {
   const { email, password, display_name } = req.body
-  if (!email || !password) return res.status(400).json({ error: 'email and password are required' })
-  if (password.length < 8)  return res.status(400).json({ error: 'password must be at least 8 characters' })
 
   const password_hash = await bcrypt.hash(password, 12)
   try {
     const { rows } = await pool.query(
       `INSERT INTO users (email, password_hash, display_name)
        VALUES ($1, $2, $3) RETURNING id, email, display_name`,
-      [email.toLowerCase().trim(), password_hash, display_name ?? null]
+      [email, password_hash, display_name ?? null]
     )
     const tokens = await issueTokens(rows[0].id)
     setRefreshCookie(res, tokens.refreshToken)
@@ -150,13 +242,12 @@ app.post('/auth/register', authLimiter, asyncRoute(async (req, res) => {
   }
 }))
 
-app.post('/auth/login', authLimiter, asyncRoute(async (req, res) => {
+app.post('/auth/login', authLimiter, validateBody(loginSchema), asyncRoute(async (req, res) => {
   const { email, password } = req.body
-  if (!email || !password) return res.status(400).json({ error: 'email and password are required' })
 
   const { rows } = await pool.query(
     'SELECT id, email, display_name, password_hash FROM users WHERE email = $1',
-    [email.toLowerCase().trim()]
+    [email]
   )
   const user = rows[0]
   // Always run bcrypt to avoid timing-based user enumeration
@@ -205,10 +296,8 @@ app.get('/auth/me', authenticate, asyncRoute(async (req, res) => {
   res.json(rows[0])
 }))
 
-app.patch('/auth/password', authenticate, asyncRoute(async (req, res) => {
+app.patch('/auth/password', authenticate, validateBody(passwordChangeSchema), asyncRoute(async (req, res) => {
   const { currentPassword, newPassword } = req.body
-  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'currentPassword and newPassword are required' })
-  if (newPassword.length < 8) return res.status(400).json({ error: 'password must be at least 8 characters' })
 
   const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.userId])
   if (rows.length === 0) return res.status(404).json({ error: 'user not found' })
@@ -347,47 +436,52 @@ async function buildQuotePayload(isin) {
 }
 
 // ---------------------------------------------------------------------------
-// Finance routes (public — no auth required)
+// Finance routes (require auth — every call site lives behind login; keeping
+// these open would let anyone use this server as an anonymous Yahoo Finance
+// proxy, or fan out unbounded requests against it)
 // ---------------------------------------------------------------------------
 
-app.get('/api/quote/:isin', async (req, res) => {
-  try { res.json(await buildQuotePayload(req.params.isin)) }
-  catch (err) { res.status(404).json({ error: err.message }) }
-})
+app.get('/api/quote/:isin', authenticate, financeLimiter, asyncRoute(async (req, res) => {
+  const parsed = isinSchema.safeParse(req.params.isin)
+  if (!parsed.success) return res.status(400).json({ error: 'invalid ISIN format' })
+  try {
+    res.json(await buildQuotePayload(parsed.data))
+  } catch (err) {
+    req.log.warn({ err, isin: parsed.data }, 'quote lookup failed')
+    res.status(404).json({ error: 'quote not found' })
+  }
+}))
 
-app.post('/api/quotes', async (req, res) => {
+app.post('/api/quotes', authenticate, financeLimiter, validateBody(quotesSchema), asyncRoute(async (req, res) => {
   const { isins } = req.body
-  if (!Array.isArray(isins) || isins.length === 0)
-    return res.status(400).json({ error: 'Body must be { isins: string[] }' })
   const results = await Promise.allSettled(isins.map(buildQuotePayload))
-  res.json(results.map((r, i) =>
-    r.status === 'fulfilled'
-      ? r.value
-      : { isin: isins[i], error: r.reason?.message ?? 'unknown error' }
-  ))
-})
+  res.json(results.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value
+    req.log.warn({ err: r.reason, isin: isins[i] }, 'quote lookup failed')
+    return { isin: isins[i], error: 'quote not found' }
+  }))
+}))
 
-app.get('/api/search', async (req, res) => {
-  const q = (req.query.q || '').trim()
+app.get('/api/search', authenticate, financeLimiter, validateQuery(searchQuerySchema), asyncRoute(async (req, res) => {
+  const { q } = req.query
   if (q.length < 2) return res.json([])
-  try {
-    const data = await yahooFinance.search(q, { quotesCount: 10, newsCount: 0 })
-    res.json((data.quotes || [])
-      .filter(h => ['ETF', 'MUTUALFUND', 'EQUITY'].includes(h.quoteType))
-      .map(h => ({
-        symbol:    h.symbol,
-        name:      h.longname || h.shortname || h.symbol,
-        exchange:  h.exchDisp || h.exchange,
-        quoteType: h.quoteType,
-      })))
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
+  const data = await yahooFinance.search(q, { quotesCount: 10, newsCount: 0 })
+  res.json((data.quotes || [])
+    .filter(h => ['ETF', 'MUTUALFUND', 'EQUITY'].includes(h.quoteType))
+    .map(h => ({
+      symbol:    h.symbol,
+      name:      h.longname || h.shortname || h.symbol,
+      exchange:  h.exchDisp || h.exchange,
+      quoteType: h.quoteType,
+    })))
+}))
 
-app.get('/api/history/:isin', async (req, res) => {
-  const { isin } = req.params
-  const period   = req.query.period || '6mo'
+app.get('/api/history/:isin', authenticate, financeLimiter, validateQuery(historyQuerySchema), asyncRoute(async (req, res) => {
+  const parsedIsin = isinSchema.safeParse(req.params.isin)
+  if (!parsedIsin.success) return res.status(400).json({ error: 'invalid ISIN format' })
+  const { period } = req.query
   try {
-    const symbol = await resolveSymbol(isin)
+    const symbol = await resolveSymbol(parsedIsin.data)
     const result = await yahooFinance.chart(symbol, {
       period1:  periodToDate(period),
       interval: period.endsWith('d') ? '1d' : period === '1mo' ? '1d' : '1wk',
@@ -396,7 +490,7 @@ app.get('/api/history/:isin', async (req, res) => {
     const fxRate      = rawCurrency !== 'EUR' ? await eurTo(rawCurrency) : 1
     const convert     = v => v != null ? round(v / fxRate, 4) : null
     res.json({
-      isin, symbol, currency: 'EUR', rawCurrency,
+      isin: parsedIsin.data, symbol, currency: 'EUR', rawCurrency,
       quotes: result.quotes.map(q => ({
         date:   q.date,
         open:   convert(q.open),
@@ -406,22 +500,23 @@ app.get('/api/history/:isin', async (req, res) => {
         volume: q.volume,
       })),
     })
-  } catch (err) { res.status(404).json({ error: err.message }) }
-})
+  } catch (err) {
+    req.log.warn({ err, isin: parsedIsin.data }, 'history lookup failed')
+    res.status(404).json({ error: 'history not found' })
+  }
+}))
 
-app.get('/api/rates', async (_req, res) => {
-  try {
-    const pairs   = ['EURUSD=X', 'EURGBP=X', 'EURCHF=X', 'EURJPY=X']
-    const results = await Promise.allSettled(pairs.map(p => yahooFinance.quote(p)))
-    const rates   = {}
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled') {
-        rates[pairs[i].replace('EUR', '').replace('=X', '')] = round(r.value.regularMarketPrice, 6)
-      }
-    })
-    res.json({ base: 'EUR', rates, ts: new Date() })
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
+app.get('/api/rates', authenticate, financeLimiter, asyncRoute(async (_req, res) => {
+  const pairs   = ['EURUSD=X', 'EURGBP=X', 'EURCHF=X', 'EURJPY=X']
+  const results = await Promise.allSettled(pairs.map(p => yahooFinance.quote(p)))
+  const rates   = {}
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      rates[pairs[i].replace('EUR', '').replace('=X', '')] = round(r.value.regularMarketPrice, 6)
+    }
+  })
+  res.json({ base: 'EUR', rates, ts: new Date() })
+}))
 
 // ---------------------------------------------------------------------------
 // Portfolio routes (protected — require valid JWT)
@@ -435,20 +530,18 @@ app.get('/api/portfolios', authenticate, asyncRoute(async (req, res) => {
   res.json(rows)
 }))
 
-app.patch('/api/portfolios/:id', authenticate, asyncRoute(async (req, res) => {
+app.patch('/api/portfolios/:id', authenticate, validateBody(portfolioNameSchema), asyncRoute(async (req, res) => {
   const { name } = req.body
-  if (!name?.trim()) return res.status(400).json({ error: 'name is required' })
   const { rows } = await pool.query(
     'UPDATE portfolios SET name = $1 WHERE id = $2 AND user_id = $3 RETURNING *',
-    [name.trim(), req.params.id, req.userId]
+    [name, req.params.id, req.userId]
   )
   if (rows.length === 0) return res.status(404).json({ error: 'portfolio not found' })
   res.json(rows[0])
 }))
 
-app.put('/api/portfolios/reorder', authenticate, asyncRoute(async (req, res) => {
+app.put('/api/portfolios/reorder', authenticate, validateBody(reorderSchema), asyncRoute(async (req, res) => {
   const { ids } = req.body
-  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids array is required' })
   await Promise.all(
     ids.map((id, index) =>
       pool.query(
@@ -460,12 +553,11 @@ app.put('/api/portfolios/reorder', authenticate, asyncRoute(async (req, res) => 
   res.status(204).end()
 }))
 
-app.post('/api/portfolios', authenticate, asyncRoute(async (req, res) => {
+app.post('/api/portfolios', authenticate, validateBody(portfolioNameSchema), asyncRoute(async (req, res) => {
   const { name } = req.body
-  if (!name?.trim()) return res.status(400).json({ error: 'name is required' })
   const { rows } = await pool.query(
     'INSERT INTO portfolios (user_id, name) VALUES ($1, $2) RETURNING *',
-    [req.userId, name.trim()]
+    [req.userId, name]
   )
   res.status(201).json(rows[0])
 }))
@@ -493,10 +585,9 @@ app.get('/api/portfolios/:id/assets', authenticate, asyncRoute(async (req, res) 
   res.json(rows)
 }))
 
-app.post('/api/portfolios/:id/assets', authenticate, asyncRoute(async (req, res) => {
+app.post('/api/portfolios/:id/assets', authenticate, validateBody(assetCreateSchema), asyncRoute(async (req, res) => {
   if (!await assertPortfolioOwner(req.params.id, req.userId, res)) return
   const { isin, name, ticker, exchange, quote_type, quantity, purchase_price_eur, target_pct } = req.body
-  if (!isin || quantity == null) return res.status(400).json({ error: 'isin and quantity are required' })
 
   // Fetch full quote to classify macro asset class (best-effort, non-blocking)
   let macroAssetClass = null
@@ -528,7 +619,7 @@ app.post('/api/portfolios/:id/assets', authenticate, asyncRoute(async (req, res)
   res.status(201).json(rows[0])
 }))
 
-app.patch('/api/portfolios/:id/assets/:assetId', authenticate, asyncRoute(async (req, res) => {
+app.patch('/api/portfolios/:id/assets/:assetId', authenticate, validateBody(assetUpdateSchema), asyncRoute(async (req, res) => {
   if (!await assertPortfolioOwner(req.params.id, req.userId, res)) return
   const { quantity, purchase_price_eur, target_pct, excluded } = req.body
   const { rows } = await pool.query(
@@ -567,8 +658,8 @@ app.get('/health', async (_req, res) => {
   }
 })
 
-app.use((err, _req, res, _next) => {
-  console.error(err)
+app.use((err, req, res, _next) => {
+  (req.log ?? logger).error({ err }, 'unhandled error')
   res.status(500).json({ error: 'internal server error' })
 })
 
@@ -583,9 +674,9 @@ async function migrate() {
 async function cleanupExpiredSessions() {
   try {
     const { rowCount } = await pool.query('DELETE FROM sessions WHERE expires_at < NOW()')
-    if (rowCount > 0) console.log(`[cleanup] removed ${rowCount} expired session(s)`)
+    if (rowCount > 0) logger.info({ rowCount }, 'removed expired sessions')
   } catch (err) {
-    console.error('[cleanup] failed to purge expired sessions', err)
+    logger.error({ err }, 'failed to purge expired sessions')
   }
 }
 
@@ -593,22 +684,7 @@ app.listen(PORT, async () => {
   await migrate()
   await cleanupExpiredSessions()
   setInterval(cleanupExpiredSessions, SESSION_CLEANUP_INTERVAL_MS)
-  console.log(`BEFF running on http://localhost:${PORT}`)
-  console.log(`  POST /auth/register`)
-  console.log(`  POST /auth/login`)
-  console.log(`  POST /auth/refresh`)
-  console.log(`  POST /auth/logout`)
-  console.log(`  GET  /api/quote/:isin`)
-  console.log(`  POST /api/quotes`)
-  console.log(`  GET  /api/search?q=...`)
-  console.log(`  GET  /api/history/:isin?period=6mo`)
-  console.log(`  GET  /api/rates`)
-  console.log(`  GET  /api/portfolios                (auth)`)
-  console.log(`  POST /api/portfolios                (auth)`)
-  console.log(`  GET  /api/portfolios/:id/assets     (auth)`)
-  console.log(`  POST /api/portfolios/:id/assets     (auth)`)
-  console.log(`  PATCH /api/portfolios/:id/assets/:aid (auth)`)
-  console.log(`  DELETE /api/portfolios/:id/assets/:aid (auth)`)
+  logger.info({ port: PORT }, 'BEFF listening')
 })
 
 // ---------------------------------------------------------------------------
