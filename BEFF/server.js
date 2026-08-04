@@ -73,9 +73,13 @@ const authLimiter = rateLimit({
 
 // Lighter than authLimiter — finance routes require a valid session, so this is
 // defense-in-depth against a single account fanning out requests to Yahoo Finance.
+// Set generously: nginx doesn't forward a header Express trusts for req.ip (only
+// X-Real-IP, not X-Forwarded-For), so every request behind the reverse proxy shares
+// one bucket — normal interactive use (ISIN search-as-you-type, switching between
+// portfolios, price refresh) can otherwise trip this on its own.
 const financeLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 30,
+  max: 120,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'too many requests, please try again later' },
