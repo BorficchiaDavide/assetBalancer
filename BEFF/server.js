@@ -111,7 +111,10 @@ function validateQuery(schema) {
   }
 }
 
-const isinSchema = z.string().trim().regex(/^[A-Z0-9]{12}$/i, 'invalid ISIN format')
+// Despite the name, this column holds either a real 12-char ISIN (when typed by
+// hand) or a Yahoo Finance ticker with an exchange suffix like "SWDA.MI" (when
+// picked from search suggestions, which is the common path) — both must validate.
+const isinSchema = z.string().trim().min(1, 'identifier is required').max(20, 'identifier too long').regex(/^[A-Za-z0-9.\-]+$/, 'invalid identifier format')
 
 const registerSchema = z.object({
   email:        z.string({ error: 'email is required' }).trim().toLowerCase().email('invalid email'),
@@ -451,7 +454,7 @@ async function buildQuotePayload(isin) {
 
 app.get('/api/quote/:isin', authenticate, financeLimiter, asyncRoute(async (req, res) => {
   const parsed = isinSchema.safeParse(req.params.isin)
-  if (!parsed.success) return res.status(400).json({ error: 'invalid ISIN format' })
+  if (!parsed.success) return res.status(400).json({ error: 'invalid identifier format' })
   try {
     res.json(await buildQuotePayload(parsed.data))
   } catch (err) {
@@ -486,7 +489,7 @@ app.get('/api/search', authenticate, financeLimiter, validateQuery(searchQuerySc
 
 app.get('/api/history/:isin', authenticate, financeLimiter, validateQuery(historyQuerySchema), asyncRoute(async (req, res) => {
   const parsedIsin = isinSchema.safeParse(req.params.isin)
-  if (!parsedIsin.success) return res.status(400).json({ error: 'invalid ISIN format' })
+  if (!parsedIsin.success) return res.status(400).json({ error: 'invalid identifier format' })
   const { period } = req.query
   try {
     const symbol = await resolveSymbol(parsedIsin.data)
