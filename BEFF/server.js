@@ -52,6 +52,10 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
 
 const app = express()
+// Behind Caddy → nginx: Caddy adds one X-Forwarded-For entry with the real client
+// IP, nginx passes it through unchanged. Trusting exactly 1 hop lets express-rate-limit
+// key on the real visitor instead of throwing (it refuses to guess otherwise).
+app.set('trust proxy', 1)
 app.use(helmet())
 app.use(cors({ origin: ALLOWED_ORIGIN, credentials: true }))
 app.use(pinoHttp({ logger }))

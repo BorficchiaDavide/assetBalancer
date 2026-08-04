@@ -23,6 +23,31 @@ function clearSession() {
 export class AuthError extends Error {}
 
 // ---------------------------------------------------------------------------
+// Token refresh — deduplicated
+// ---------------------------------------------------------------------------
+
+let refreshPromise = null
+
+// The refresh token rotates on every use, so two concurrent refreshes (e.g. quotes
+// and rates hitting a stale token at the same time) would race: the second arrives
+// after the first already invalidated the old token, fails, and its 401 response
+// clears the cookie the first refresh had just renewed. Sharing one in-flight
+// promise means concurrent 401s all await the same refresh instead of racing.
+function refreshAccessToken() {
+  if (!refreshPromise) {
+    refreshPromise = fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
+      .then(async r => {
+        if (!r.ok) { clearSession(); throw new AuthError('Sessione scaduta — effettua di nuovo il login') }
+        const data = await r.json()
+        _accessToken = data.accessToken
+        return data.accessToken
+      })
+      .finally(() => { refreshPromise = null })
+  }
+  return refreshPromise
+}
+
+// ---------------------------------------------------------------------------
 // Core fetch wrapper — auto-refreshes on 401
 // ---------------------------------------------------------------------------
 
@@ -48,15 +73,8 @@ async function request(method, path, body) {
   // expired session, and there's no session yet to refresh.
   const isAuthEntryPoint = path === '/auth/login' || path === '/auth/register'
   if (res.status === 401 && !isAuthEntryPoint) {
-    const r2 = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
-    if (r2.ok) {
-      const refreshData = await r2.json()
-      _accessToken = refreshData.accessToken
-      res = await doFetch()
-    } else {
-      clearSession()
-      throw new AuthError('Sessione scaduta — effettua di nuovo il login')
-    }
+    await refreshAccessToken()
+    res = await doFetch()
   }
 
   if (res.status === 204) return null
@@ -103,10 +121,7 @@ export async function changePassword(currentPassword, newPassword) {
 // Returns the user object on success, null if no valid session exists.
 export async function restoreSession() {
   try {
-    const r = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
-    if (!r.ok) { clearSession(); return null }
-    const refreshData = await r.json()
-    _accessToken = refreshData.accessToken
+    await refreshAccessToken()
     const user = await get('/auth/me')
     saveUser(user)
     return user
