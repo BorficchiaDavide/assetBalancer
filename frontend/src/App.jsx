@@ -26,7 +26,7 @@ export default function App() {
 
   const { user, clearUser, handleLogin, handleLogout, handleRestoreSession } = useAuth()
 
-  const { portfolios, portfolioId, portfolioIdRef, setCurrentPortfolio, loadPortfolios, clearPortfolios, handleRenamePortfolio, handleReorderPortfolios, handleCreatePortfolio, handleDeletePortfolio } = usePortfolios({ onAuthError: goToLogin })
+  const { portfolios, portfolioId, portfolioIdRef, setCurrentPortfolio, pickInitialPortfolio, loadPortfolios, clearPortfolios, handleRenamePortfolio, handleReorderPortfolios, handleCreatePortfolio, handleDeletePortfolio } = usePortfolios({ onAuthError: goToLogin })
 
   const { holdings, holdingsRef, setHoldings, setHoldingsRaw, loadHoldingsForPortfolio, clearHoldings, clearCacheForPortfolio } = useHoldings({ portfolioIdRef, onAuthError: goToLogin })
 
@@ -58,7 +58,7 @@ export default function App() {
   async function loadPortfolioFlow() {
     try {
       const all = await loadPortfolios()
-      const portfolio = all[0]
+      const portfolio = pickInitialPortfolio(all)
       if (!portfolio) { setRoute('onboard'); return }
 
       setCurrentPortfolio(portfolio.id)

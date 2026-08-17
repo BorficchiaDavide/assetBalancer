@@ -154,10 +154,10 @@ const historyQuerySchema = z.object({
 
 const assetCreateSchema = z.object({
   isin:               isinSchema,
-  name:               z.string().trim().optional(),
-  ticker:             z.string().trim().optional(),
-  exchange:           z.string().trim().optional(),
-  quote_type:         z.string().trim().optional(),
+  name:               z.string().trim().nullable().optional(),
+  ticker:             z.string().trim().nullable().optional(),
+  exchange:           z.string().trim().nullable().optional(),
+  quote_type:         z.string().trim().nullable().optional(),
   quantity:           z.coerce.number().positive('quantity must be positive'),
   purchase_price_eur: z.coerce.number().nonnegative().nullable().optional(),
   target_pct:         z.coerce.number().min(0).max(100).nullable().optional(),

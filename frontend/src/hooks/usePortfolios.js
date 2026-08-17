@@ -1,6 +1,23 @@
 import { useState, useRef } from 'react'
 import { AuthError, fetchPortfolios, createPortfolio, renamePortfolio, reorderPortfolios, deletePortfolio } from '../api'
 
+const LAST_PORTFOLIO_KEY = 'assetbalancer_last_portfolio_id'
+
+function loadLastPortfolioId() {
+  try {
+    const raw = localStorage.getItem(LAST_PORTFOLIO_KEY)
+    return raw ? Number(raw) : null
+  } catch { return null }
+}
+
+function saveLastPortfolioId(id) {
+  try { localStorage.setItem(LAST_PORTFOLIO_KEY, String(id)) } catch {}
+}
+
+function clearLastPortfolioId() {
+  try { localStorage.removeItem(LAST_PORTFOLIO_KEY) } catch {}
+}
+
 export function usePortfolios({ onAuthError }) {
   const [portfolios,  setPortfolios]  = useState([])
   const [portfolioId, setPortfolioId] = useState(null)
@@ -9,6 +26,15 @@ export function usePortfolios({ onAuthError }) {
   function setCurrentPortfolio(id) {
     portfolioIdRef.current = id
     setPortfolioId(id)
+    if (id) saveLastPortfolioId(id)
+  }
+
+  // Picks which portfolio should be active after (re)loading the list:
+  // whichever the user had open last, falling back to the first one.
+  function pickInitialPortfolio(all) {
+    if (all.length === 0) return null
+    const lastId = loadLastPortfolioId()
+    return all.find(p => p.id === lastId) || all[0]
   }
 
   async function loadPortfolios() {
@@ -53,11 +79,12 @@ export function usePortfolios({ onAuthError }) {
     setPortfolios([])
     setPortfolioId(null)
     portfolioIdRef.current = null
+    clearLastPortfolioId()
   }
 
   return {
     portfolios, portfolioId, portfolioIdRef,
-    setCurrentPortfolio, loadPortfolios, clearPortfolios,
+    setCurrentPortfolio, pickInitialPortfolio, loadPortfolios, clearPortfolios,
     handleRenamePortfolio, handleReorderPortfolios, handleCreatePortfolio, handleDeletePortfolio,
   }
 }
