@@ -13,6 +13,9 @@ dist/
 # macOS
 .DS_Store
 
+# JetBrains IDEs
+.idea/
+
 # Claude Code internal
 .claude/
 
